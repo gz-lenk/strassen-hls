@@ -1,6 +1,14 @@
 #ifndef XF_BLAS_GEMM_KERNEL_HPP
 #define XF_BLAS_GEMM_KERNEL_HPP
 
+#include "types.hpp"
+#include "params.hpp"
+#include <hls_stream.h>
+
+namespace xf{
+
+namespace blas {
+
 /**
  * @brief GEMM kernel
  * @tparam t_DataType Data type for matrix A, B, C
@@ -17,8 +25,18 @@ template <typename t_DataType,    // matrix A, B entry data type
           >
 class GemmKernel {
    public:
-    static const unsigned int t_aMH = t_MemWidth * t_aRowMemWords;
-    static const unsigned int t_aMW = t_MemWidth * t_aColMemWords;
+    static const unsigned int t_aMH = t_MemWidth * t_aRowMemWords;  //m维度
+    static const unsigned int t_bKD = t_MemWidth * t_aColMemWords;  //k维度
+
+    typedef WideType<t_DataType, t_MemWidth> MemWideType;
+    typedef typename MemWideType::t_TypeInt MemIntType;
+    typedef hls::stream<MemIntType> MemStream;
+
+    typedef hls::stream<typename TaggedWideType<t_DataType, t_MemWidth>::t_TypeInt> EdgeStream;
+
+    typedef t_DataType MacBitType;
+    typedef MemWideType WideMacBitType;
+    typedef MemStream WideMacBitStream;
 
 
    public:
@@ -33,27 +51,37 @@ class GemmKernel {
         MemStream& p_As,
         MemStream& p_Bs
     ) {
+        loop_m_block:
         for(int l_aRowBlock = 0; l_aRowBlock < l_aRowBlocks; ++l_aRowBlock) {
             #pragma HLS LOOP_TRIPCOUNT min=BLAS_gemmMBlocks max=BLAS_gemmMBlocks avg=BLAS_gemmMBlocks
+            loop_n_block:
             for(int l_bColBlock = 0; l_bColBlock < l_bColBlocks; ++l_bColBlock) {
                 #pragma HLS LOOP_TRIPCOUNT min=BLAS_gemmNBlocks max=BLAS_gemmNBlocks avg=BLAS_gemmNBlocks
+                loop_k_block:
                 for(int l_aColBlock = 0; l_aColBlock < l_aColBlocks; ++l_aColBlock) {
                     #pragma HLS LOOP_TRIPCOUNT min=BLAS_gemmKBlocks max=BLAS_gemmKBlocks avg=BLAS_gemmKBlocks
                     // l_bufferB
+                    loop_B_k:
                     for (int i = 0; i < t_bKD; ++i){
+                        #pragma HLS LOOP_TRIPCOUNT min=BLAS_memWidth*BLAS_gemmKBlocks max=BLAS_memWidth*BLAS_gemmKBlocks avg=BLAS_memWidth*BLAS_gemmKBlocks
                         #pragma HLS PIPELINE II=t_bColMemWords
+                        loop_B_n:
                         for (int j = 0; j < t_bColMemWords; ++j){
-                            #pragma HLS LOOP_TRIPCOUNT min=BLAS_memWidth max=BLAS_memWidth avg=BLAS_memWidth
-                            unsigned int l_bAddrIdx = (l_bColBlock * t_bColMemWords + j) + (i + l_aColBlock * t_bKD) * l_bWordLd;
-                            MemIntType l_bVal = l_bAddr[l_bAddrIdx];
+                            #pragma HLS LOOP_TRIPCOUNT min=BLAS_gemmNBlocks max=BLAS_gemmNBlocks avg=BLAS_gemmNBlocks
+                            unsigned int l_bSrcOffset = 
+                                i * l_bWordLd + l_bWordLd * t_bKD * l_aColBlock + l_bColBlock * t_bColMemWords + j; //地址计算可能过于复杂
+                            MemIntType l_bVal = l_bAddr[l_bSrcOffset];
                             p_Bs.write(l_bVal);
                         }
                     }
                     // l_bufferA
-                    for (int i = 0; i < t_aMH; i++){  // Number of matrix elements in one col of matrix A buffer
+                    loop_A_m:
+                    for (int i = 0; i < t_aMH; i++){
+                        #pragma HLS LOOP_TRIPCOUNT min=BLAS_memWidth*BLAS_gemmMBlocks max=BLAS_memWidth*BLAS_gemmMBlocks avg=BLAS_memWidth*BLAS_gemmMBlocks
                         #pragma HLS PIPELINE II = t_aColMemWords
+                        loop_A_k:
                         for (int j = 0; j < t_aColMemWords; j++) {
-                            #pragma HLS LOOP_TRIPCOUNT min=BLAS_memWidth max=BLAS_memWidth avg=BLAS_memWidth
+                            #pragma HLS LOOP_TRIPCOUNT min=BLAS_gemmMBlocks max=BLAS_gemmMBlocks avg=BLAS_gemmMBlocks
                             unsigned int l_aSrcOffset =
                                 l_aWordLd * t_aMH * l_aRowBlock + l_aColBlock * t_aColMemWords + i * l_aWordLd + j;
                             MemIntType l_word = l_aAddr[l_aSrcOffset];
@@ -71,10 +99,11 @@ class GemmKernel {
         MemStream& p_As,
         MemStream& p_Bs,
         MemStream& p_Cs,
-        unsigned int l_aColBlocks,
-        unsigned int l_aRowBlocks,
-        unsigned int l_bColBlocks,
-        unsigned int p_transpBlocks
+        unsigned int p_aColBlocks,
+        unsigned int p_aRowBlocks,
+        unsigned int p_bColBlocks,
+        unsigned int p_transpBlocks,
+        int32_t p_postScale
     ){
         unsigned int l_cBlocks = p_aRowBlocks * p_bColBlocks;
         unsigned int l_abBlocks = l_cBlocks * p_aColBlocks;
@@ -118,15 +147,23 @@ class GemmKernel {
         unsigned int l_rowOffset = 0;
         unsigned int l_colOffset = 0;
 
+        loop_m_block:
         for (int rowBlock = 0; rowBlock < l_aRowBlocks; ++rowBlock) {
+            #pragma HLS LOOP_TRIPCOUNT min=BLAS_gemmMBlocks max=BLAS_gemmMBlocks avg=BLAS_gemmMBlocks
+            loop_n_block:
             for (int colBlock = 0; colBlock < l_bColBlocks; ++colBlock) {
-                for (int i = 0; i < t_aMH; i++) {
-                    #pragma HLS PIPELINE II = t_aColMemWords
+                #pragma HLS LOOP_TRIPCOUTN min=BLAS_gemmNBlocks max=BLAS_gemmNBlocks avg=BLAS_gemmNBlocks
+                loop_m:
+                for (int i = 0; i < t_aRowMemWords * t_MemWidth; i++) {
+                    #pragma HLS LOOP_TRIPCOUNT min=BLAS_m/BLAS_gemmMBlocks max=BLAS_m/BLAS_gemmMBlocks avg=BLAS_m/BLAS_gemmMBlocks
+                    #pragma HLS PIPELINE II = t_bColMemWords
+                    loop_n:
                     for (int j = 0; j < t_bColMemWords; j++) {
-                        unsigned int l_cDstOffset =
-                            l_cWordLd * t_aMH * rowBlock + colBlock * t_bColMemWords + i * l_cWordLd + j;
+                        #pragma HLS LOOP_TRIPCOUNT min=BLAS_gemmNBlocks max=BLAS_gemmNBlocks avg=BLAS_gemmNBlocks
+                        unsigned int l_dstOffset = i * l_cWordLd + l_cWordLd * t_MemWidth * t_aRowMemWords * rowBlock +
+                                                   colBlock * t_bColMemWords;
                         MemIntType l_word = p_Cs.read();
-                        l_cAddr[l_cDstOffset] = l_word;
+                        l_cAddr[l_dstOffset+j] = l_word;
                     }
                 }
             }
@@ -159,10 +196,13 @@ class GemmKernel {
 
         unsigned int l_cBlocks = p_aRowBlocks * p_bColBlocks;
 
-        GemmReadABX(p_aAddr, p_bAddr, p_aColBlocks, p_aRowBlocks, p_bColBlocks, p_aLd, p_bLd, l_As,l_Bs);
+        GemmReadAB(p_aAddr, p_bAddr, p_aColBlocks, p_aRowBlocks, p_bColBlocks, p_aLd, p_bLd, l_As, l_Bs);
         GemmBlockStream(l_As, l_Bs, l_Cs, p_aColBlocks, p_aRowBlocks, p_bColBlocks, p_transpBlocks, p_postScale);
         GemmWriteMemStream(p_cAddr, l_Cs, p_aRowBlocks, p_bColBlocks, p_cLd);
     }
 
 };
+} // namespace blas
+
+} // namespace xf
 #endif

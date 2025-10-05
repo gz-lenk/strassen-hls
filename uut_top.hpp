@@ -3,14 +3,17 @@
 
 #include <hls_stream.h>
 #include "gemmKernel.hpp"
+#include "params.hpp"
 
-typedef GemmKernel<BLAS_dataType,
-			      BLAS_dataType,
-			      BLAS_memWidth,
+typedef xf::blas:: GemmKernel<BLAS_dataType,
 			      BLAS_memWidth,
 			      BLAS_gemmKBlocks,
 			      BLAS_gemmMBlocks,
 			      BLAS_gemmNBlocks> GemmTypeBaseline;
+
+typedef WideType<BLAS_dataType, BLAS_memWidth> MemWideType;
+typedef typename MemWideType::t_TypeInt MemIntType;
+typedef hls::stream<MemIntType> MemStream;
 
 void uut_top( MemIntType* l_aAddr, 
         MemIntType* l_bAddr, 

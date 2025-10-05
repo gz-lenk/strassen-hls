@@ -21,6 +21,6 @@ void uut_top(
 
     GemmTypeBaseline l_gemmKernel;
     const unsigned int l_transpBlocks = l_aColBlocks * l_aRowBlocks * l_bColBlocks * BLAS_gemmMBlocks;
-    l_gemmKernel.GemmBlocks(l_aAddr, l_bAddr, l_cAddr, l_cAddr, l_aColBlocks, l_aRowBlocks, l_bColBlocks, l_aLd, l_bLd, l_cLd, l_cLd, l_transpBlocks, 1);
+    l_gemmKernel.GemmBlocks(l_aAddr, l_bAddr, l_cAddr, l_aColBlocks, l_aRowBlocks, l_bColBlocks, l_aLd, l_bLd, l_cLd, l_transpBlocks, 1);
 
 }
