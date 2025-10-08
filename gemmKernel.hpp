@@ -2,10 +2,11 @@
 #define XF_BLAS_GEMM_KERNEL_HPP
 
 #include "types.hpp"
-// #include "transpose.hpp"
-// #include "matrixBuffer.hpp"
+#include "transpose.hpp"
+#include "matrixBuffer.hpp"
 #include <hls_stream.h>
 #include "params.hpp"
+#include "gemm.hpp"
 
 namespace xf{
 
@@ -110,9 +111,11 @@ class GemmKernel {
                 l_bufferC[i][j] = 0;
             }
         }
-
+        
+        
         for (int l_block = 0; l_block < p_cBlocks; ++l_block) {
             #pragma HLS LOOP_TRIPCOUNT min=BLAS_gemmMBlocks*BLAS_gemmNBlocks max=BLAS_gemmMBlocks*BLAS_gemmNBlocks avg=BLAS_gemmMBlocks*BLAS_gemmNBlocks
+            loop_buffer_C_acc:
             for (int m = 0; m < p_aColBlocks; ++m) {
                 #pragma HLS LOOP_TRIPCOUNT min=BLAS_gemmMBlocks max=BLAS_gemmMBlocks avg=BLAS_gemmMBlocks
                 for (int i = 0; i < t_aRowMemWords; ++i) {
@@ -133,6 +136,7 @@ class GemmKernel {
                 }
             }
 
+            loop_buffer_C_write:
             for (int i = 0; i < t_bColMemWords * t_aRowMemWords * t_MemWidth; ++i) {
                 #pragma HLS LOOP_TRIPCOUNT min=256 max=256 avg=256
                 #pragma HLS PIPELINE
@@ -166,14 +170,16 @@ class GemmKernel {
         #pragma HLS RESOURCE variable = p_CEdgeS core = fifo_uram
 
         // 转置A
-        // Transpose<t_DataType, t_aColMemWords, t_MemWidth> l_transp(p_transpBlocks, t_bColMemWords);
-        // l_transp.process(p_As, p_AoutS);
+        Transpose<t_DataType, t_aColMemWords, t_MemWidth> l_transp(p_transpBlocks, t_bColMemWords);
+        l_transp.process(p_As, p_AoutS);
 
         // B缓冲
-        // MatrixBuffer<typename MemWideType::t_TypeInt, t_MemWidth * t_aColMemWords, t_bColMemWords, true, false>()
-        //     .process(p_Bs, p_Bs1, l_abBlocks, t_aRowMemWords);
+        MatrixBuffer<typename MemWideType::t_TypeInt, t_MemWidth * t_aColMemWords, t_bColMemWords, true, false>()
+            .process(p_Bs, p_Bs1, l_abBlocks, t_aRowMemWords);
 
         // 矩阵乘内核
+        Gemm<t_DataType, t_bKD, t_MemWidth>::gemm(p_AoutS, p_Bs1, p_CEdgeS,
+                                                   l_abBlocks * t_aRowMemWords * t_bColMemWords);
 
         // C缓冲
         GemmCBuffer(p_CEdgeS, p_aColBlocks, l_cBlocks, p_Cs);
