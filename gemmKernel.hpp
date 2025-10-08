@@ -2,8 +2,10 @@
 #define XF_BLAS_GEMM_KERNEL_HPP
 
 #include "types.hpp"
-#include "params.hpp"
+// #include "transpose.hpp"
+// #include "matrixBuffer.hpp"
 #include <hls_stream.h>
+#include "params.hpp"
 
 namespace xf{
 
@@ -13,15 +15,15 @@ namespace blas {
  * @brief GEMM kernel
  * @tparam t_DataType Data type for matrix A, B, C
  * @tparam t_MemWidth number of elements in one memory word
- * @tparam t_aColMemWords number of memory words in one row of the matrix A buffer
- * @tparam t_aRowMemWords number of memory words in one column of the matrix A buffer
- * @tparam t_bColMemWords number of memory words in one row of the matrix
+ * @tparam t_aColMemWords 
+ * @tparam t_aRowMemWords 
+ * @tparam t_bColMemWords 
  */
 template <typename t_DataType,    // matrix A, B entry data type
           unsigned int t_MemWidth, // number of matrix elements in one memory word
-          unsigned int t_aColMemWords = 1, // number of memory words in one row of the matrix A buffer
-          unsigned int t_aRowMemWords = 1, // number of memory words in one column of the matrix A buffer
-          unsigned int t_bColMemWords = 1  // number of memory words in one row of the matrix B buffer
+          unsigned int t_aColMemWords = 1, 
+          unsigned int t_aRowMemWords = 1, 
+          unsigned int t_bColMemWords = 1  
           >
 class GemmKernel {
    public:
@@ -93,7 +95,53 @@ class GemmKernel {
         }
     }
 
-    void GemmCBuffer(){}
+    void GemmCBuffer(
+        WideMacBitStream& p_Cs,
+        unsigned int p_aColBlocks,
+        unsigned int p_cBlocks,
+        WideMacBitStream& p_Cout
+    ){
+        WideMacBitType l_bufferC[t_aMH * t_bColMemWords];
+        loop_buffer_C_init:
+        for (int i = 0; i < t_aMH * t_bColMemWords; i++){
+            #pragma HLS LOOP_TRIPCOUNT min=64*BLAS_gemmNBlocks max=64*BLAS_gemmNBlocks avg=64*BLAS_gemmNBlocks
+            #pragma HLS PIPELINE
+            for (int j = 0; j < t_MemWidth; j++){
+                l_bufferC[i][j] = 0;
+            }
+        }
+
+        for (int l_block = 0; l_block < p_cBlocks; ++l_block) {
+            #pragma HLS LOOP_TRIPCOUNT min=BLAS_gemmMBlocks*BLAS_gemmNBlocks max=BLAS_gemmMBlocks*BLAS_gemmNBlocks avg=BLAS_gemmMBlocks*BLAS_gemmNBlocks
+            for (int m = 0; m < p_aColBlocks; ++m) {
+                #pragma HLS LOOP_TRIPCOUNT min=BLAS_gemmMBlocks max=BLAS_gemmMBlocks avg=BLAS_gemmMBlocks
+                for (int i = 0; i < t_aRowMemWords; ++i) {
+                    #pragma HLS LOOP_TRIPCOUNT min=BLAS_gemmMBlocks max=BLAS_gemmMBlocks avg=BLAS_gemmMBlocks
+                    for (int j = 0; j < t_bColMemWords; ++j) {
+                        #pragma HLS LOOP_TRIPCOUNT min=BLAS_gemmMBlocks max=BLAS_gemmMBlocks avg=BLAS_gemmMBlocks
+                        for (int l = 0; l < t_MemWidth; ++l) {
+                            #pragma HLS DEPENDENCE variable = l_bufferC array inter RAW false
+                            #pragma HLS PIPELINE
+                            unsigned int l_arrIdx = (l + i * t_MemWidth) * t_bColMemWords + j;
+                            WideMacBitType l_val = p_Cs.read();
+                            for (int k = 0; k < t_MemWidth; ++k) {
+                                #pragma HLS LOOP_TRIPCOUNT min=BLAS_memWidth max=BLAS_memWidth avg=BLAS_memWidth
+                                l_bufferC[l_arrIdx][k] += l_val[k];
+                            }
+                        }
+                    }
+                }
+            }
+
+            for (int i = 0; i < t_bColMemWords * t_aRowMemWords * t_MemWidth; ++i) {
+                #pragma HLS LOOP_TRIPCOUNT min=256 max=256 avg=256
+                #pragma HLS PIPELINE
+                WideMacBitType l_val = l_bufferC[i];
+                p_Cout.write(l_val);
+                for (int k = 0; k < t_MemWidth; k++) l_bufferC[i][k] = 0;
+            }
+        }
+    }
 
     void GemmBlockStream(
         MemStream& p_As,
@@ -118,12 +166,17 @@ class GemmKernel {
         #pragma HLS RESOURCE variable = p_CEdgeS core = fifo_uram
 
         // 转置A
+        // Transpose<t_DataType, t_aColMemWords, t_MemWidth> l_transp(p_transpBlocks, t_bColMemWords);
+        // l_transp.process(p_As, p_AoutS);
 
         // B缓冲
+        // MatrixBuffer<typename MemWideType::t_TypeInt, t_MemWidth * t_aColMemWords, t_bColMemWords, true, false>()
+        //     .process(p_Bs, p_Bs1, l_abBlocks, t_aRowMemWords);
 
         // 矩阵乘内核
 
         // C缓冲
+        GemmCBuffer(p_CEdgeS, p_aColBlocks, l_cBlocks, p_Cs);
 
 
     }

@@ -5,6 +5,7 @@
         "limits": "cpp",
         "semaphore": "cpp",
         "algorithm": "cpp",
-        "ratio": "cpp"
+        "ratio": "cpp",
+        "valarray": "cpp"
     }
 }
